@@ -1189,7 +1189,13 @@ function drawArtImage(src){return new Promise(resolve=>{const img=new Image();im
 function closeArtEditor(){$("art-editor")?.classList.add("hidden");document.body.classList.remove("art-editor-open");activeArtPanel=null;adminArtEditId=null;participantArtEditId=null;artDrawing=false;$("art-delete")?.classList.add("hidden");}
 async function openArtPanel(number, existing=null){
   if(!isFullName(getPlayerName())){toast("اعتمد اسمك الثلاثي أولًا لفتح مساحة الرسم.");return;}
-  adminArtEditId=null;participantArtEditId=existing&&ownedArtworkIds.has(String(existing.id))?existing.id:null;
+  const isOwnArtwork=!!(existing&&ownedArtworkIds.has(String(existing.id)));
+  if(!isOwnArtwork&&ownedArtworkIds.size>=1){
+    const ownRow=artworkRows.find(row=>ownedArtworkIds.has(String(row.id)));
+    toast(ownRow?`لديك مربع واحد بالفعل: رقم ${ar(ownRow.panel_number)}. يمكنك تعديل مربعك فقط.`:"يسمح لكل مشارك بمربع واحد فقط.");
+    return;
+  }
+  adminArtEditId=null;participantArtEditId=isOwnArtwork?existing.id:null;
   activeArtPanel=number;$("art-editor-title").textContent=existing?`تعديل مساهمتك في المربع ${ar(number)}`:`المربع رقم ${ar(number)}`;
   $("art-status").textContent="";$("art-editor").classList.remove("hidden");document.body.classList.add("art-editor-open");
   if(existing&&participantArtEditId){await drawArtImage(existing.image_data);$("art-status").textContent="يمكنك تعديل صورتك أو رسمتك أو حذفها.";}
@@ -1233,8 +1239,24 @@ $("art-eraser")?.addEventListener("click",()=>{artEraser=!artEraser;$("art-erase
 $("art-undo")?.addEventListener("click",async()=>{const prev=artHistory.pop();if(prev){await drawArtImage(prev);artDirty=true;}});
 $("art-clear")?.addEventListener("click",()=>{if(confirm("مسح محتوى هذا المربع؟")){saveArtHistory();blankArtCanvas();artDirty=true;}});
 $("art-editor-close")?.addEventListener("click",closeArtEditor);
-$("art-board-fullscreen")?.addEventListener("click",async()=>{const board=$("art-board");try{if(!document.fullscreenElement){await board.requestFullscreen();board.classList.add("board-expanded");}else await document.exitFullscreen();}catch(e){board.classList.toggle("board-expanded");}});
-document.addEventListener("fullscreenchange",()=>{$("art-board")?.classList.toggle("board-expanded",document.fullscreenElement===$("art-board"));});
+const communityBoard=$("art-board");
+let boardZoomLevel=0;
+function setBoardZoom(next){
+  boardZoomLevel=Math.max(-1,Math.min(2,next));
+  communityBoard?.classList.remove("board-zoom-minus","board-zoom-plus","board-zoom-max");
+  if(boardZoomLevel===-1)communityBoard?.classList.add("board-zoom-minus");
+  if(boardZoomLevel===1)communityBoard?.classList.add("board-zoom-plus");
+  if(boardZoomLevel===2)communityBoard?.classList.add("board-zoom-max");
+}
+$("art-board-zoom-in")?.addEventListener("click",()=>setBoardZoom(boardZoomLevel+1));
+$("art-board-zoom-out")?.addEventListener("click",()=>setBoardZoom(boardZoomLevel-1));
+$("art-board-fullscreen")?.addEventListener("click",()=>{
+  if(!communityBoard)return;
+  const expanded=communityBoard.classList.toggle("board-expanded");
+  document.body.classList.toggle("community-board-open",expanded);
+  $("art-board-fullscreen").textContent=expanded?"× إغلاق التكبير":"⛶ تكبير اللوحة";
+  if(expanded)communityBoard.scrollIntoView({block:"start"});
+});
 async function loadArtwork(){
   const root=$("art-board");if(!root||!supabaseClient)return;
   const {data,error}=await supabaseClient.from("community_artworks").select("id,panel_number,player_name,image_data,created_at").order("panel_number",{ascending:true});
@@ -1257,8 +1279,10 @@ async function loadArtwork(){
       const name=document.createElement("b");name.className="panel-owner";name.textContent=a.player_name;tile.append(img,name);
       if(ownedArtworkIds.has(String(a.id))){const own=document.createElement("span");own.className="panel-edit-hint";own.textContent="تعديل مساهمتك";tile.append(own);}
     }else{const plus=document.createElement("span");plus.className="panel-plus";plus.textContent="+";tile.append(plus);}
+    if(!a&&ownedArtworkIds.size>=1){tile.classList.add("panel-unavailable");tile.setAttribute("aria-label",`المربع ${n} فارغ لكنه غير متاح لك لأنك تملك مربعًا بالفعل`);}
     tile.addEventListener("click",()=>{
-      if(a){if(ownedArtworkIds.has(String(a.id)))openArtPanel(n,a);else{$("art-status").textContent=`المربع ${ar(n)} من أعمال ${a.player_name}. لا يمكن تعديل مساهمات الآخرين.`;tile.classList.add("panel-pulse");setTimeout(()=>tile.classList.remove("panel-pulse"),450);}return;}
+      if(a){if(ownedArtworkIds.has(String(a.id)))openArtPanel(n,a);else{$("art-status").textContent=`المربع ${ar(n)} من أعمال ${a.player_name}. يمكنك مشاهدة الرسم، لكن التعديل متاح لصاحبه فقط.`;tile.classList.add("panel-pulse");setTimeout(()=>tile.classList.remove("panel-pulse"),450);}return;}
+      if(ownedArtworkIds.size>=1){const ownRow=artworkRows.find(row=>ownedArtworkIds.has(String(row.id)));$("art-status").textContent=ownRow?`لديك مربع واحد بالفعل، وهو المربع ${ar(ownRow.panel_number)}. افتحه لتعديل رسمك.`:"يسمح لكل مشارك باختيار مربع واحد فقط.";return;}
       openArtPanel(n);
     });
     root.append(tile);
@@ -1279,6 +1303,7 @@ $("art-submit")?.addEventListener("click",async()=>{
   if(!activeArtPanel||(!adminArtEditId&&!isFullName(name))){status.textContent="اعتمد اسمك الثلاثي واختر مربعًا أولًا.";return;}
   if(!supabaseClient){status.textContent="تعذر الاتصال بقاعدة البيانات.";return;}
   if(!artDirty){status.textContent="أضف صورة أو أجرِ تعديلًا على الرسم قبل الحفظ.";return;}
+  if(!adminArtEditId&&!participantArtEditId&&ownedArtworkIds.size>=1){status.textContent="يسمح لكل مشارك بمربع واحد فقط. افتح مربعك الحالي لتعديله.";return;}
   if(!adminArtEditId&&!artOwnerToken){status.textContent="تعذر إنشاء مفتاح ملكية لهذه المساهمة. فعّل التخزين المحلي ثم أعد المحاولة.";return;}
   const button=$("art-submit");button.disabled=true;status.textContent="جارٍ حفظ المساهمة...";
   const image=artCanvas.toDataURL("image/jpeg",0.82);
